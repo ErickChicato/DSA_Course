@@ -18,7 +18,7 @@ int main(){
     //For the Min
     for(int i=0;i<5;i++){
         if(Arr[i]<=Min){
-          min = Arr[i];
+          Min = Arr[i];
         }
     }
 
