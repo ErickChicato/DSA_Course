@@ -8,6 +8,8 @@ int top = 1 ;
 void push();
 void display();
 void pop();
+void isEmpty();
+
 
 int main(){
 
@@ -25,6 +27,8 @@ int main(){
             case 1: push();
                     break;
             case 2: pop();
+                    break;
+            case 4: isEmpty();
                     break;
             case 5: display();
                     break;
@@ -84,6 +88,18 @@ void pop(){
         top--;
         printf(" \n Deleted elements ");
 
+    }
+
+
+}
+
+void isEmpty(){
+
+    if(top==-1){
+        printf("\n Stack is empty");
+    }
+    else{
+        printf("\n Stack is not empty");
     }
 
 
