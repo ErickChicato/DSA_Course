@@ -80,7 +80,7 @@ void pop(){
     int temp;
 
     if(top==-1){
-        printf(\n"Stack is underflow");
+        printf("\n Stack is underflow");
     }
 
     else{
