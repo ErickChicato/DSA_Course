@@ -3,8 +3,6 @@
 
 int CountingValley(int steps,char *path);
 
-
-
 int main(){
 
     int steps = 8;

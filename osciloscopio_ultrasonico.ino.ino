@@ -11,6 +11,9 @@ void push();
 void pop();
 void display();
 
+//Functions for Min,Max and average
+void Max(int *Array);
+
 void setup() {
   Serial.begin(9600);
   pinMode(TRIGGER_PIN, OUTPUT);
@@ -76,8 +79,21 @@ void pop(){
   temp = stack[distance];
   distance--;
 
-
 }
 
+void Max(int *Array){
+
+  //Max value 
+  int Max=(*Array); //primer elemento del array
+  //Recorrer el array de los elementos obtenidos
+  for(int i=0;i<=sizeof(Array);i++){
+
+    if(*(Array + i) > Max){
+      Max = *Array+i;
+    }
+
+  }
+
+}
 
 
