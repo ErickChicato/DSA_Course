@@ -11,8 +11,7 @@ void push();
 void pop();
 void display();
 
-//Functions for Min,Max and average
-void Max(int *Array);
+//New Functions
 
 void setup() {
   Serial.begin(9600);
@@ -81,18 +80,33 @@ void pop(){
 
 }
 
-void Max(int *Array){
+void Max(int *Array, int size){
 
-  //Max value 
-  int Max=(*Array); //primer elemento del array
-  //Recorrer el array de los elementos obtenidos
-  for(int i=0;i<=sizeof(Array);i++){
+  int Max = Array[0];
 
-    if(*(Array + i) > Max){
-      Max = *Array+i;
+  for(int i=1;i<size;i++){
+    if(Array[i] > Max){
+      Max = Array[i];
     }
-
   }
+
+  Serial.print("El valor maximo es de ");
+  Serial.println(Max);
+
+}
+
+
+void Average(int *Array, int size){
+
+  int sum = 0 ;
+
+  for(int i=0;i<size;i++){
+    sum += Array[i];
+  }
+  //Calcular el promedio 
+  float average = (float)sum / size;
+  Serial.print("El promedio es: ");
+  Serial.println(average);
 
 }
 
