@@ -1,90 +1,78 @@
+
 #include "main.h"
+#include "cmsis_os.h"
 
-#define BUTTON_UP_PIN  			GPIO_PIN_0
-#define BUTTON_DOWN_PIN 		GPIO_PIN_1
-#define BUTTON_SELECT_PIN 		GPIO_PIN_2
+#include <stdio.h>
 
-//Logic for the driver
-//**********************************************************
-#define APB1PERIPH_BASEADDR	   0x40000000UL
-#define RTC_BASEADDR		   (APB1PERIPH_BASEADDR + 2800)
+#define TRIG_PIN GPIO_PIN_9
+#define TRIG_PORT GPIOA
 
-//Estos bits estan dentro de TR
-#define DU_BIT					0
-#define DT_BIT					4
-#define MU_BIT					8
-
-
-RTC_HandleTypeDef hrtc;
+TIM_HandleTypeDef htim1;
 UART_HandleTypeDef huart2;
 
-RTC_TimeTypeDef RTC_TimeStruct;
-RTC_DateTypeDef RTC_DateStruct;
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 
-typedef struct {
-	volatile uint32_t TR;
-	volatile uint32_t DR;
-}RTC_RegDef;
+//For the ultrasonic
+uint32_t IC_Val1 = 0 ;
+uint32_t IC_Val2 = 0;
+uint32_t Difference = 0;
+uint8_t Is_First_Captured = 0;
+uint8_t Distance = 0 ;
 
-
-#define RTC1	((RTC_RegDef*)RTC_BASEADDR)
-//************************************************************
-typedef enum {
-  SET_HOUR,
-  SET_MINUTE,
-  SET_SECOND,
-  SET_DAY,
-  SET_MONTH,
-  SET_YEAR
-}SetState;
-
-SetState currentState = SET_HOUR;
-
-typedef enum {
-  ONE,
-  TWO,
-  THREE,
-  FOUR
-}SetDateTime;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_RTC_Init(void);
+static void MX_TIM1_Init(void);
+void ProcessDistanceTask(void *pvParameters);
+void HCSR04_Read(void);
+void HCSR04_Task(void *pvParameters);
 
-/*For the experiment*/
-void set_time(void);
-void get_time(void);
-
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
-
-uint32_t ConfigureRTC(uint8_t sel,SetDateTime Date);
+QueueHandle_t xQueue;
 
 
 int main(void)
 {
-
   HAL_Init();
 
   SystemClock_Config();
 
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_RTC_Init();
-
-  //Understand how it works , think how to implement this ...
-  set_time();
-  get_time();
-
-  //Function Driver
+  MX_TIM1_Init();
 
 
-  while (1)
-  {
+
+  xQueue = xQueueCreate( 10, sizeof( unsigned long ) );
+
+  if(xQueue == NULL){
 
   }
-  /* USER CODE END 3 */
+
+
+  xTaskCreate(ProcessDistanceTask,
+		  "ProcessDistanceTask",
+		  128,
+		  NULL,
+		  tskIDLE_PRIORITY+3,
+		  NULL);
+
+  // Creación de la tarea para leer el HCSR04
+  xTaskCreate(HCSR04_Task, "HCSR04_Task", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+
+
+
+
+
+  vTaskStartScheduler();
+
 }
 
 /**
@@ -99,31 +87,22 @@ void SystemClock_Config(void)
   /** Configure the main internal regulator output voltage
   */
   __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 180;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLM = 16;
+  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
   RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Activate the Over-Drive mode
-  */
-  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
@@ -134,178 +113,145 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
 }
 
 /**
-  * @brief RTC Initialization Function
+  * @brief TIM1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_RTC_Init(void)
+static void MX_TIM1_Init(void)
 {
 
+  /* USER CODE BEGIN TIM1_Init 0 */
 
-  RTC_TimeTypeDef sTime = {0};
-  RTC_DateTypeDef sDate = {0};
-  RTC_AlarmTypeDef sAlarm = {0};
+  /* USER CODE END TIM1_Init 0 */
 
-  hrtc.Instance = RTC;
-  hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
-  hrtc.Init.AsynchPrediv = 127;
-  hrtc.Init.SynchPrediv = 255;
-  hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
-  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
-  hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
-  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 72-1;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 0xffff-1;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
   }
-
-  /* USER CODE BEGIN Check_RTC_BKUP */
-
-  /* USER CODE END Check_RTC_BKUP */
-
-  /** Initialize RTC and set the Time and Date
-  */
-  sTime.Hours = 0x10;
-  sTime.Minutes = 0x20;
-  sTime.Seconds = 0x30;
-  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sDate.WeekDay = RTC_WEEKDAY_THURSDAY;
-  sDate.Month = RTC_MONTH_AUGUST;
-  sDate.Date = 0x9;
-  sDate.Year = 0x18;
-
-  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
+  /* USER CODE BEGIN TIM1_Init 2 */
 
-  /** Enable the Alarm A
-  */
-  sAlarm.AlarmTime.Hours = 0x12;
-  sAlarm.AlarmTime.Minutes = 0x1;
-  sAlarm.AlarmTime.Seconds = 0x2;
-  sAlarm.AlarmTime.SubSeconds = 0x0;
-  sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-  sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
-  sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
-  sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
-  sAlarm.AlarmDateWeekDay = 0x9;
-  sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN RTC_Init 2 */
-
-  /* USER CODE END RTC_Init 2 */
+  /* USER CODE END TIM1_Init 2 */
 
 }
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 
-	switch(GPIO_Pin){
+void ProcessDistanceTask(void *pvParameters){
 
-	case BUTTON_UP_PIN:
-		 switch(currentState){
+	uint8_t receivedDistance;
 
-		  case SET_HOUR:
-			   RTC_TimeStruct.Hours = (RTC_TimeStruct.Hours + 1) % 24;
-		       break;
-
-		  case SET_MINUTE:
-			  RTC_TimeStruct.Minutes = (RTC_TimeStruct.Minutes + 1) % 60;
-		      break;
-
-		 }
-		 break;
-
-	case BUTTON_DOWN_PIN:
-		switch(currentState){
-
-		case SET_HOUR:
-			RTC_TimeStruct.Hours = (RTC_TimeStruct.Hours - 1 + 24) % 24;
-			break;
-		case SET_MINUTE:
-			RTC_TimeStruct.Minutes = (RTC_TimeStruct.Minutes - 1 + 60) % 60;
-			break;
-		}
-		break;
-
-	case BUTTON_SELECT_PIN:
-
-		if(currentState == SET_YEAR){
-			currentState = SET_HOUR;
-		}
-		else{
-			currentState++;
-		}
-
-		break;
+	//Wait until a distance value is received
+	if(xQueueReceive(xQueue, &receivedDistance, portMAX_DELAY) == pdPASS){
+		printf("Distance : %d \n",Distance);
 	}
 
-	//Update the RTC
-	HAL_RTC_SetTime(&hrtc, &RTC_TimeStruct, RTC_FORMAT_BIN);
-	HAL_RTC_SetDate(&hrtc, &RTC_DateStruct, RTC_FORMAT_BIN);
+}
+
+void HCSR04_Task(void *pvParameters){
+
+	while(1){
+		HCSR04_Read();
+		 vTaskDelay(pdMS_TO_TICKS(100));
+	}
 
 }
 
-//Fix , find where is the issue
-uint32_t ConfigureRTC(uint8_t sel,SetDateTime Date){
 
-	uint32_t temp_RTC_DR;
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim){
 
-	//1. Which type of register do you want?
-	switch(sel){
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
 
-	case 1 :
-		temp_RTC_DR = RTC1->DR;
-		//Limpiar los bits de source
-		temp_RTC_DR &= ~(0x0F << DU_BIT); //
-		//Settear los bits de source
-		temp_RTC_DR |= (Date << DU_BIT); //aqui se configura el bit
-		//Asignar el valor
-		RTC->DR = temp_RTC_DR;
-		break;
+		if(Is_First_Captured == 0){
 
-	case 2:
-       temp_RTC_DR = RTC1->DR;
-       //Limpiar los bits de source
-       temp_RTC_DR &= ~(0x03 << DT_BIT); //
-       //Settear los bits de source
-       temp_RTC_DR |= (Date << DT_BIT);
-       //Asignar el valor
-       RTC->DR = temp_RTC_DR;
-       break;
+		  IC_Val1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);//Read the first value
+		  Is_First_Captured = 1;
+		  //Change the polarity to falling edge
+		  __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 
-	case 3:
-	   temp_RTC_DR = RTC1->DR;
-	   //Limpiar los bits de source
-	   temp_RTC_DR &= ~(0x0F<< MU_BIT); //
-	   //Settear los bits de source
-	   temp_RTC_DR |= (Date << MU_BIT);
-	   //Asignar el valor
-	   RTC->DR = temp_RTC_DR;
-	   break;
+		}
+
+		else if(Is_First_Captured == 1){
+
+			IC_Val2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);//Read the first value
+			__HAL_TIM_SET_COUNTER(htim,0); //reset the counter
+
+			if(IC_Val2>IC_Val1){
+			   Difference = IC_Val2-IC_Val1;
+			}
+			else if(IC_Val1 > IC_Val2){
+				Difference = (0xffff - IC_Val1) + IC_Val2;
+			}
+
+			Distance = Difference * 0.034/2;
+			Is_First_Captured = 0;
+
+			//Send the distance to the Queue
+			xQueueSendFromISR(xQueue, &Distance, NULL);
+			// set polarity to rising edge
+			__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
+			__HAL_TIM_DISABLE_IT(&htim1, TIM_IT_CC1);
+
+		}
 
 	}
-  return temp_RTC_DR;
+
 }
 
+void HCSR04_Read(void){
+
+	//Pull the trig pinn high
+	HAL_GPIO_WritePin(TRIG_PORT, TRIG_PIN, GPIO_PIN_SET);
+
+	// Wait for 10 microseconds (assuming 1 tick is 1ms, so 1 tick/portTICK_PERIOD_MS = 1ms)
+	// For 10 microseconds, we need a delay shorter than a tick period, use a precise delay function
+	uint32_t startTick = xTaskGetTickCount();
+
+	while((xTaskGetTickCount() - startTick) < (10 / portTICK_PERIOD_MS)){
+		 // Busy-wait loop for precise timing
+	}
+
+	//Pull the TRIG pin low
+	HAL_GPIO_WritePin(TRIG_PORT, TRIG_PIN, GPIO_PIN_RESET);
+
+	//Enable the interrupt for timer capture compare
+	__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC1);
+}
 
 /**
   * @brief USART2 Initialization Function
@@ -356,7 +302,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -364,63 +310,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin PA9 */
+  GPIO_InitStruct.Pin = LD2_Pin|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 }
 
-/* USER CODE BEGIN 4 */
-
-void set_time(void){
-
-	RTC_TimeTypeDef sTime;
-	RTC_DateTypeDef sDate;
-
-	sTime.Hours = 0x10; // set hours
-	sTime.Minutes = 0x20; // set minutes
-	sTime.Seconds = 0x30; // set seconds
-	sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-	sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-
-	if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK) {
-		//
-	}
-
-	sDate.WeekDay = RTC_WEEKDAY_THURSDAY; //
-    sDate.Month = RTC_MONTH_AUGUST; //
-	sDate.Date = 0x9; // date
-	sDate.Year = 0x18; // year
-
-	if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
-	{
-	   //
-    }
-
-   HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, 0x32F2); // backup register
-
-   ConfigureRTC(1,ONE);
-
-
-}
-
-
-void get_time(void){
-
-	RTC_DateTypeDef gDate;
-	RTC_TimeTypeDef gTime;
-
-	HAL_RTC_GetTime(&hrtc, &gTime, RTC_FORMAT_BIN);
-	/* Get the RTC current Date */
-	HAL_RTC_GetDate(&hrtc, &gDate, RTC_FORMAT_BIN);
-	/* Display time Format: hh:mm:ss */
-
-}
-
-/* USER CODE END 4 */
 
 /**
   * @brief  This function is executed in case of error occurrence.
