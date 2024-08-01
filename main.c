@@ -9,6 +9,12 @@
 #define APB1PERIPH_BASEADDR	   0x40000000UL
 #define RTC_BASEADDR		   (APB1PERIPH_BASEADDR + 2800)
 
+//Estos bits estan dentro de TR
+#define DU_BIT					0
+#define DT_BIT					4
+#define MU_BIT					8
+
+
 RTC_HandleTypeDef hrtc;
 UART_HandleTypeDef huart2;
 
@@ -22,7 +28,7 @@ typedef struct {
 }RTC_RegDef;
 
 
-#define RTC		((RTC_RegDef*)RTC_BASEADDR)
+#define RTC1	((RTC_RegDef*)RTC_BASEADDR)
 //************************************************************
 typedef enum {
   SET_HOUR,
@@ -35,15 +41,25 @@ typedef enum {
 
 SetState currentState = SET_HOUR;
 
+typedef enum {
+  ONE,
+  TWO,
+  THREE,
+  FOUR
+}SetDateTime;
+
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_RTC_Init(void);
 
+/*For the experiment*/
 void set_time(void);
 void get_time(void);
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
+
+uint32_t ConfigureRTC(uint8_t sel,SetDateTime Date);
 
 
 int main(void)
@@ -248,6 +264,48 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 
 }
 
+//Fix , find where is the issue
+uint32_t ConfigureRTC(uint8_t sel,SetDateTime Date){
+
+	uint32_t temp_RTC_DR;
+
+	//1. Which type of register do you want?
+	switch(sel){
+
+	case 1 :
+		temp_RTC_DR = RTC1->DR;
+		//Limpiar los bits de source
+		temp_RTC_DR &= ~(0x0F << DU_BIT); //
+		//Settear los bits de source
+		temp_RTC_DR |= (Date << DU_BIT); //aqui se configura el bit
+		//Asignar el valor
+		RTC->DR = temp_RTC_DR;
+		break;
+
+	case 2:
+       temp_RTC_DR = RTC1->DR;
+       //Limpiar los bits de source
+       temp_RTC_DR &= ~(0x03 << DT_BIT); //
+       //Settear los bits de source
+       temp_RTC_DR |= (Date << DT_BIT);
+       //Asignar el valor
+       RTC->DR = temp_RTC_DR;
+       break;
+
+	case 3:
+	   temp_RTC_DR = RTC1->DR;
+	   //Limpiar los bits de source
+	   temp_RTC_DR &= ~(0x0F<< MU_BIT); //
+	   //Settear los bits de source
+	   temp_RTC_DR |= (Date << MU_BIT);
+	   //Asignar el valor
+	   RTC->DR = temp_RTC_DR;
+	   break;
+
+	}
+  return temp_RTC_DR;
+}
+
 
 /**
   * @brief USART2 Initialization Function
@@ -343,6 +401,10 @@ void set_time(void){
     }
 
    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, 0x32F2); // backup register
+
+   ConfigureRTC(1,ONE);
+
+
 }
 
 
